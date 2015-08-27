@@ -88,14 +88,29 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
         NB_THREADS = min(len(cipher_list), MAX_THREADS) # One thread per cipher
         thread_pool = ThreadPool()
 
+        cipher_whitelist = ['ECDHE-RSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-AES128-GCM-SHA256',
+                            'ECDHE-RSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-AES256-GCM-SHA384', 'DHE-RSA-AES128-GCM-SHA256',
+                            'DHE-DSS-AES128-GCM-SHA256', 'kEDH+AESGCM', 'ECDHE-RSA-AES128-SHA256',
+                            'ECDHE-ECDSA-AES128-SHA256', 'ECDHE-RSA-AES128-SHA', 'ECDHE-ECDSA-AES128-SHA',
+                            'ECDHE-RSA-AES256-SHA384', 'ECDHE-ECDSA-AES256-SHA384', 'ECDHE-RSA-AES256-SHA',
+                            'ECDHE-ECDSA-AES256-SHA', 'DHE-RSA-AES128-SHA256', 'DHE-RSA-AES128-SHA',
+                            'DHE-DSS-AES128-SHA256', 'DHE-RSA-AES256-SHA256', 'DHE-DSS-AES256-SHA',
+                            'DHE-RSA-AES256-SHA']
+
+        cipher_blacklist = ['RC4', 'EXPORT', 'DES', 'aNULL', 'eNULL', 'MD5']
+        version_whitelist = [ 'TLSV1_1', 'TLSV1_2']
+        version_blacklist = ['SSLV2', 'SSLV3']
+        cdict = {'whitelist': cipher_whitelist, 'blacklist': cipher_blacklist}
+        verdict = {'whitelist': version_whitelist, 'blacklist': version_blacklist}
+
         # Scan for every available cipher suite
         for cipher in cipher_list:
             thread_pool.add_job((self._test_ciphersuite,
-                                 (target, sslVersion, cipher)))
+                                 (target, sslVersion, cipher, cdict)))
 
         # Scan for the preferred cipher suite
         thread_pool.add_job((self._pref_ciphersuite,
-                             (target, sslVersion)))
+                             (target, sslVersion, cdict)))
 
         # Start processing the jobs
         thread_pool.start(NB_THREADS)
@@ -120,22 +135,25 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
         thread_pool.join()
 
         # Generate results
-        return PluginBase.PluginResult(self._generate_text_output(result_dicts, command),
-                                       self._generate_xml_output(result_dicts, command))
+        return PluginBase.PluginResult(self._generate_text_output(result_dicts, command, verdict),
+                                       self._generate_xml_output(result_dicts, command, verdict))
 
 
 # == INTERNAL FUNCTIONS ==
 
 # FORMATTING FUNCTIONS
-    def _generate_text_output(self, resultDicts, sslVersion):
-        vuln_versions = ['SSLV2', 'SSLV3']  # Update if vulns are found/patched
+    def _generate_text_output(self, resultDicts, sslVersion, verdict):
         cipherFormat = '                 {0:<32}    {1:<35}'.format
         titleFormat =  '      {0:<32} '.format
         keysizeFormat = '{0:<30}{1:<15}{2:<10}'.format
 
         txtTitle = self.PLUGIN_TITLE_FORMAT(sslVersion.upper() + ' Cipher Suites')
-        if sslVersion.upper() in vuln_versions:
-            txtTitle += " (*Vulnerable*)"
+        if sslVersion.upper() not in verdict.get('whitelist'):
+            if sslVersion.upper() not in verdict.get('blacklist'):
+                txtTitle += " (~Possibly Vulnerable or Deprecated~)"
+            else:
+                txtTitle += " (*Vulnerable*)"
+
         txtOutput = []
 
         dictTitles = [('preferredCipherSuite', 'Preferred:'),
@@ -189,8 +207,7 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
 
 
     @staticmethod
-    def _generate_xml_output(result_dicts, command):
-        vuln_versions = ['SSLV2', 'SSLV3']  # Update if vulns are found/patched
+    def _generate_xml_output(result_dicts, command, verdict):
         xmlNodeList = []
         isProtocolSupported = False
 
@@ -223,8 +240,11 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
 
             xmlNodeList.append(xmlNode)
         title = command.upper() + ' Cipher Suites'
-        if command.upper() in vuln_versions:
-            title += ' (*Vulnerable*)'
+        if command.upper() not in verdict.get('whitelist'):
+            if command.upper() not in verdict.get('blacklist'):
+                title += " (~Possibly Vulnerable or Deprecated~)"
+            else:
+                title += " (*Vulnerable*)"
         # Create the final node and specify if the protocol was supported
         xmlOutput = Element(command, title=title, isProtocolSupported=str(isProtocolSupported))
         for xmlNode in xmlNodeList:
@@ -234,7 +254,7 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
 
 
 # SSL FUNCTIONS
-    def _test_ciphersuite(self, target, ssl_version, ssl_cipher):
+    def _test_ciphersuite(self, target, ssl_version, ssl_cipher, cipher_dict):
         """
         Initiates a SSL handshake with the server, using the SSL version and
         cipher suite specified.
@@ -263,20 +283,23 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
                 dh_infos = None
             status_msg = sslConn.post_handshake_check()
 
-            vuln_ciphers = ['RC4', 'EXPORT', 'DES', 'aNULL', 'eNULL', 'MD5']  # Update if vulns are found/patched
-
             # append *WEAK* if cipher is known to be vulnerable
-            for ciph in vuln_ciphers:
-                if ciph in ssl_cipher:
-                    ssl_cipher += ' *WEAK*'
-                    break
+            if ssl_cipher not in cipher_dict.get('whitelist'):
+                for item in cipher_dict.get('blacklist'):
+                    if item in ssl_cipher:
+                        ssl_cipher += ' *WEAK*'
+                        break
+                if '*WEAK*' not in ssl_cipher:
+                    ssl_cipher += ' (~Possibly Vulnerable~)'
+
+
             return 'acceptedCipherSuites', ssl_cipher, keysize, dh_infos, status_msg
 
         finally:
             sslConn.close()
 
 
-    def _pref_ciphersuite(self, target, ssl_version):
+    def _pref_ciphersuite(self, target, ssl_version, cipher_dict):
         """
         Initiates a SSL handshake with the server, using the SSL version and cipher
         suite specified.
@@ -296,13 +319,15 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
             else :
                 dh_infos = None
 
-            vuln_ciphers = ['RC4', 'EXPORT', 'DES', 'aNULL', 'eNULL', 'MD5']  # Update if vulns are found/patched
-
             # append *WEAK* if cipher is known to be vulnerable
-            for ciph in vuln_ciphers:
-                if ciph in ssl_cipher:
-                    ssl_cipher += ' *WEAK*'
-                    break
+            if ssl_cipher not in cipher_dict.get('whitelist'):
+                for item in cipher_dict.get('blacklist'):
+                    if item in ssl_cipher:
+                        ssl_cipher += ' *WEAK*'
+                        break
+                if '*WEAK*' not in ssl_cipher:
+                    ssl_cipher += ' (~Possibly Vulnerable~)'
+
             status_msg = sslConn.post_handshake_check()
             return 'preferredCipherSuite', ssl_cipher, keysize,  dh_infos, status_msg
 

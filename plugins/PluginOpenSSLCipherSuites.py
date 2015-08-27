@@ -128,12 +128,14 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
 
 # FORMATTING FUNCTIONS
     def _generate_text_output(self, resultDicts, sslVersion):
-
+        vuln_versions = ['SSLV2', 'SSLV3']  # Update if vulns are found/patched
         cipherFormat = '                 {0:<32}    {1:<35}'.format
         titleFormat =  '      {0:<32} '.format
         keysizeFormat = '{0:<30}{1:<15}{2:<10}'.format
 
         txtTitle = self.PLUGIN_TITLE_FORMAT(sslVersion.upper() + ' Cipher Suites')
+        if sslVersion.upper() in vuln_versions:
+            txtTitle += " (*Vulnerable*)"
         txtOutput = []
 
         dictTitles = [('preferredCipherSuite', 'Preferred:'),
@@ -188,7 +190,7 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
 
     @staticmethod
     def _generate_xml_output(result_dicts, command):
-
+        vuln_versions = ['SSLV2', 'SSLV3']  # Update if vulns are found/patched
         xmlNodeList = []
         isProtocolSupported = False
 
@@ -220,9 +222,11 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
                 xmlNode.append(cipherXml)
 
             xmlNodeList.append(xmlNode)
-
+        title = command.upper() + ' Cipher Suites'
+        if command.upper() in vuln_versions:
+            title += ' (*Vulnerable*)'
         # Create the final node and specify if the protocol was supported
-        xmlOutput = Element(command, title=command.upper() + ' Cipher Suites', isProtocolSupported=str(isProtocolSupported))
+        xmlOutput = Element(command, title=title, isProtocolSupported=str(isProtocolSupported))
         for xmlNode in xmlNodeList:
             xmlOutput.append(xmlNode)
 
@@ -258,6 +262,14 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
             else :
                 dh_infos = None
             status_msg = sslConn.post_handshake_check()
+
+            vuln_ciphers = ['RC4', 'EXPORT', 'DES', 'aNULL', 'eNULL', 'MD5']  # Update if vulns are found/patched
+
+            # append *WEAK* if cipher is known to be vulnerable
+            for ciph in vuln_ciphers:
+                if ciph in ssl_cipher:
+                    ssl_cipher += ' *WEAK*'
+                    break
             return 'acceptedCipherSuites', ssl_cipher, keysize, dh_infos, status_msg
 
         finally:
@@ -284,6 +296,13 @@ class PluginOpenSSLCipherSuites(PluginBase.PluginBase):
             else :
                 dh_infos = None
 
+            vuln_ciphers = ['RC4', 'EXPORT', 'DES', 'aNULL', 'eNULL', 'MD5']  # Update if vulns are found/patched
+
+            # append *WEAK* if cipher is known to be vulnerable
+            for ciph in vuln_ciphers:
+                if ciph in ssl_cipher:
+                    ssl_cipher += ' *WEAK*'
+                    break
             status_msg = sslConn.post_handshake_check()
             return 'preferredCipherSuite', ssl_cipher, keysize,  dh_infos, status_msg
 
